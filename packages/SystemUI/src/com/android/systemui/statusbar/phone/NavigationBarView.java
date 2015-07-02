@@ -16,9 +16,12 @@
 
 package com.android.systemui.statusbar.phone;
 
+import android.animation.Animator;
+import android.animation.AnimatorSet;
 import android.animation.LayoutTransition;
 import android.animation.LayoutTransition.TransitionListener;
 import android.animation.ObjectAnimator;
+import android.animation.ArgbEvaluator;
 import android.animation.TimeInterpolator;
 import android.animation.ValueAnimator;
 import android.app.ActivityManagerNative;
@@ -30,6 +33,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.res.Resources;
 import android.graphics.Point;
+import android.graphics.PorterDuff;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.os.Handler;
@@ -56,6 +60,7 @@ import com.android.systemui.statusbar.policy.KeyButtonView;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.util.ArrayList;
 
 public class NavigationBarView extends LinearLayout {
     final static boolean DEBUG = false;
@@ -78,6 +83,8 @@ public class NavigationBarView extends LinearLayout {
     int mDisabledFlags = 0;
     int mNavigationIconHints = 0;
 
+    private int mPreviousOverrideIconColor = 0;
+    private int mOverrideIconColor = 0;
     private Drawable mBackIcon, mBackLandIcon, mBackAltIcon, mBackAltLandIcon;
     private Drawable mRecentIcon;
     private Drawable mRecentLandIcon;
@@ -95,6 +102,8 @@ public class NavigationBarView extends LinearLayout {
 
     // performs manual animation in sync with layout transitions
     private final NavTransitionListener mTransitionListener = new NavTransitionListener();
+
+    private final int mDSBDuration;
 
     private class NavTransitionListener implements TransitionListener {
         private boolean mBackTransitioning;
@@ -213,6 +222,60 @@ public class NavigationBarView extends LinearLayout {
 
         mCameraDisabledByDpm = isCameraDisabledByDpm();
         watchForDevicePolicyChanges();
+
+        mDSBDuration = context.getResources().getInteger(R.integer.dsb_transition_duration);
+        BarBackgroundUpdater.addListener(new BarBackgroundUpdater.UpdateListener(this) {
+
+            @Override
+            public Animator onUpdateNavigationBarIconColor(final int previousIconColor,
+                    final int iconColor) {
+                mPreviousOverrideIconColor = previousIconColor;
+                mOverrideIconColor = iconColor;
+
+                return generateButtonColorsAnimatorSet();
+            }
+
+        });
+    }
+
+    private AnimatorSet generateButtonColorsAnimatorSet() {
+        final ImageView[] buttons = new ImageView[] {
+            (ImageView) getRecentsButton(),
+            (ImageView) getMenuButton(),
+            (ImageView) getBackButton(),
+            (ImageView) getHomeButton(),
+            (ImageView) getSearchLight(),
+            (ImageView) getCameraButton()
+        };
+
+        final ArrayList<Animator> anims = new ArrayList<Animator>();
+
+        for (final ImageView button : buttons) {
+            if (button != null) {
+                if (mOverrideIconColor == 0) {
+                    mHandler.post(new Runnable() {
+
+                        @Override
+                        public void run() {
+                            button.setColorFilter(null);
+                        }
+
+                    });
+                } else {
+                    anims.add(ObjectAnimator.ofObject(button, "colorFilter",
+                            new ArgbEvaluator(), mPreviousOverrideIconColor,
+                            mOverrideIconColor).setDuration(mDSBDuration));
+                }
+            }
+        }
+
+        if (anims.isEmpty()) {
+            return null;
+        } else {
+            final AnimatorSet animSet = new AnimatorSet();
+            animSet.playTogether(anims);
+            return animSet;
+        }
     }
 
     private void watchForDevicePolicyChanges() {
@@ -266,29 +329,29 @@ public class NavigationBarView extends LinearLayout {
     }
 
     public View getRecentsButton() {
-        return mCurrentView.findViewById(R.id.recent_apps);
+        return mCurrentView == null ? null : mCurrentView.findViewById(R.id.recent_apps);
     }
 
     public View getMenuButton() {
-        return mCurrentView.findViewById(R.id.menu);
+        return mCurrentView == null ? null : mCurrentView.findViewById(R.id.menu);
     }
 
     public View getBackButton() {
-        return mCurrentView.findViewById(R.id.back);
+        return mCurrentView == null ? null : mCurrentView.findViewById(R.id.back);
     }
 
     public View getHomeButton() {
-        return mCurrentView.findViewById(R.id.home);
+        return mCurrentView == null ? null : mCurrentView.findViewById(R.id.home);
     }
 
     // for when home is disabled, but search isn't
     public View getSearchLight() {
-        return mCurrentView.findViewById(R.id.search_light);
+        return mCurrentView == null ? null : mCurrentView.findViewById(R.id.search_light);
     }
 
     // shown when keyguard is visible and camera is available
     public View getCameraButton() {
-        return mCurrentView.findViewById(R.id.camera_button);
+        return mCurrentView == null ? null : mCurrentView.findViewById(R.id.camera_button);
     }
 
     private void getIcons(Resources res) {
@@ -452,6 +515,18 @@ public class NavigationBarView extends LinearLayout {
 
         mCurrentView = mRotatedViews[Surface.ROTATION_0];
 
+	mHandler.post(new Runnable() {
+
+            @Override
+            public void run() {
+                final AnimatorSet animSet = generateButtonColorsAnimatorSet();
+                if (animSet != null) {
+                    animSet.start();
+                }
+            }
+
+        });
+
         watchForAccessibilityChanges();
     }
 
@@ -522,6 +597,21 @@ public class NavigationBarView extends LinearLayout {
         }
 
         setNavigationIconHints(mNavigationIconHints, true);
+        // Reset recents hints after reorienting
+        ((ImageView)getRecentsButton()).setImageDrawable(mVertical
+                ? mRecentLandIcon : mRecentIcon);
+
+        mHandler.post(new Runnable() {
+
+            @Override
+            public void run() {
+                final AnimatorSet animSet = generateButtonColorsAnimatorSet();
+                if (animSet != null) {
+                    animSet.start();
+                }
+            }
+
+        });
     }
 
     @Override
